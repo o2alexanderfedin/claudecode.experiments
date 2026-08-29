@@ -44,7 +44,7 @@ cd claudecode.experiments
 |---|---|---|
 | [`claude`](https://claude.com/claude-code) | the CLI under test | `npm i -g @anthropic-ai/claude-code` |
 | `jq` | parsing JSON / JSONL output | `brew install jq` |
-| `git-flow` | branching model | `brew install git-flow-avh` |
+| `git-flow` | branching model | `brew install git-flow-avh` (or `git-flow` for nvie — see the caveat below) |
 
 Scripts write their artifacts to `out/`, which is git-ignored.
 
@@ -180,11 +180,27 @@ This repository uses **git-flow** with `main` as the production branch and
 ```bash
 git flow feature start <name>     # branch off develop
 # ... commit ...
-git flow feature finish <name>    # merge back into develop
+GIT_MERGE_AUTOEDIT=no git flow feature finish <name>   # merge back into develop
 
 git flow release start 0.2.0      # branch off develop
-git flow release finish -m "Release 0.2.0" 0.2.0   # merge to main + develop, tag v0.2.0
+GIT_MERGE_AUTOEDIT=no git flow release finish -m Release-0.2.0 0.2.0
 ```
+
+Two gotchas when driving git-flow from a script rather than a terminal:
+
+- **`GIT_MERGE_AUTOEDIT=no`** stops each merge from opening an editor. Without
+  it a headless `finish` hangs.
+- **A space-free `-m`.** nvie git-flow (`0.4.1`, the Homebrew `git-flow`
+  formula) parses flags with BSD `getopt`, which rejects spaces inside an
+  option value — `-m "Release 0.2.0"` dies with *"the available getopt does not
+  support spaces in options"*. Pass `-m Release-0.2.0`, then rewrite the
+  annotation before pushing if you want prose:
+
+  ```bash
+  git tag -f -a v0.2.0 -m "Release 0.2.0 — what changed" "$(git rev-list -n1 v0.2.0)"
+  ```
+
+  `git-flow-avh` does not have this limitation.
 
 **`main` and `develop` are protected.** A tracked `pre-commit` hook rejects
 direct commits to either branch and warns on branch names outside

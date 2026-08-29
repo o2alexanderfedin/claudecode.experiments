@@ -1,0 +1,20 @@
+# Claude Code session/memory scratch
+.remember/
+.claude/settings.local.json
+
+# Experiment output — runs are reproducible, artifacts are not committed
+out/
+*.log
+*.jsonl
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example

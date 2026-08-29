@@ -18,3 +18,8 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Per-run inputs and artifacts of experiments/run-task.sh
+/task.md
+/pong.txt
+/1.txt

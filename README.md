@@ -50,6 +50,97 @@ Scripts write their artifacts to `out/`, which is git-ignored.
 
 ---
 
+## Running a task headlessly, on the subscription
+
+The `-p` examples above bill per API token. To run a task unattended **on the
+Claude subscription** the session has to stay interactive — which raises the
+question this repository was really built to answer:
+
+> How do we make Claude Code execute a task and exit *when the work is done* —
+> not before, not never?
+
+The answer that works:
+
+```bash
+cat > task.md <<'EOF'
+...the real spec, as long as you like...
+EOF
+
+./experiments/run-task.sh
+```
+
+Three moving parts:
+
+| File | Role |
+|---|---|
+| [`experiments/run-task.sh`](experiments/run-task.sh) | sends exactly one line on stdin — `execute task from task.md file` — under a pty |
+| [`experiments/hooks/stop-terminate.sh`](experiments/hooks/stop-terminate.sh) | `Stop` hook: signals the session the instant the turn ends |
+| [`.claude/settings.json`](.claude/settings.json) | wires the hook up |
+
+Measured end-to-end run:
+
+```
+❯ execute task from task.md file
+  ⎿  pong
+raw exit : 143          ← 128 + SIGTERM, sent by the Stop hook
+elapsed  : 10s
+status   : COMPLETED (terminated by Stop hook after the turn)
+```
+
+### Why this design and not something simpler
+
+Each alternative was tried and measured, not assumed.
+
+| Approach | Why it was rejected |
+|---|---|
+| `claude -p "task"` | Bills per API token instead of the subscription. Non-negotiable for this repo. |
+| `printf 'task\n/exit\n' \| claude-eng` | **Piped stdin is read to EOF and submitted as ONE prompt** — a newline is not `Enter`. The trailing `/exit` arrives as prompt *text*. The task ran; the session then stayed open forever. Claude's own words in the transcript: *"/exit … не сработал … сессия останется открытой"*. |
+| Append `/exit` later into an open stdin (`tail -f`, FIFO) | Follows from the same finding: submission is triggered by EOF, not by newline. Nothing written after the first prompt is ever submitted. |
+| A timer that appends `/exit` "after a while" | A race by construction. Too early truncates the work, too late wastes wall-clock. The finish time is not knowable in advance. |
+| `claude mcp serve` | Docs: it *"only exposes Claude Code's tools to your MCP client"*. A tool provider, not an agent runner — no task execution, no completion signal. |
+| `echo "/exit" \| claude-eng > 1.txt` | Redirecting stdout makes it a non-TTY, which flips Claude Code into non-interactive mode. Output: `/exit isn't available in this environment.` — and that is the billed path again. |
+
+What survives is the only party that actually knows when the work finished:
+**Claude Code itself**. The `Stop` hook fires when the turn ends, so the exit is
+an event, never an estimate.
+
+### Terminating the *correct* process
+
+The hook walks up from its own pid and takes the **nearest** `claude` ancestor.
+Nearest matters: a runner may well be launched from another Claude Code session,
+which sits further up the same chain and must not be touched.
+
+Two safeties:
+
+- The hook is a no-op unless `CLAUDE_BATCH_EXIT=1` is in the environment, and
+  only `run-task.sh` exports it. Interactive sessions in this repository are
+  unaffected — but note that the hook *is* configured repo-wide and does send
+  `SIGKILL`, so it is worth knowing about.
+- `SIGTERM` first, `SIGKILL` after a 5 s grace, because Claude Code has been
+  observed to ignore `SIGTERM`.
+
+### Harness notes
+
+Driving a TUI from a script has three traps, each of which cost a debugging
+round here:
+
+1. **`timeout` needs `--foreground`.** Without it the command lands in its own
+   process group, its first terminal read raises `SIGTTIN`, and it freezes at
+   0% CPU having rendered nothing and read nothing. This looks exactly like
+   "Claude ignores stdin" and is not.
+2. **A pty from `script(1)` starts at `0 0`.** The TUI cannot lay out on a
+   zero-width terminal and hangs. Run `stty rows 50 columns 200` inside it.
+3. **`script(1)` reads termios from its own stdin** and aborts with
+   `tcgetattr/ioctl: Operation not supported on socket` when that stdin is a
+   socket, as it is under an agent's tool runner. Give it `</dev/null
+   >/dev/null` and read the typescript log it writes instead.
+
+The billing rule is enforced in code, not in comments: `run-task.sh` re-enters
+itself under a pty and **refuses to launch claude at all** if stdout is still
+not a TTY.
+
+---
+
 ## The experiments
 
 | # | Script | What it demonstrates |
@@ -163,10 +254,12 @@ claude stop <id>                  # stop it, keeping the transcript
 
 ```
 .
+├── .claude/            # Stop hook wiring for the headless runner
 ├── .githooks/          # tracked git hooks (installed by scripts/setup-hooks.sh)
-├── examples/           # the experiments — one script per idea
+├── examples/           # the -p experiments — one script per idea
+├── experiments/        # the subscription-billed headless runner and its hook
 ├── scripts/            # repository tooling (setup-hooks.sh, lint.sh)
-├── out/                # run artifacts (git-ignored)
+├── out/                # run artifacts and session transcripts (git-ignored)
 └── README.md
 ```
 

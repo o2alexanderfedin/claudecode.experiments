@@ -69,6 +69,7 @@ KILL_GRACE=15          # claude ignores SIGTERM; timeout needs -k to follow up
 command -v timeout >/dev/null || { echo "timeout(1) not found" >&2; exit 127; }
 
 # shellcheck disable=SC2329  # invoked via trap
+# shellcheck disable=SC2317  # invoked by the EXIT trap below; older shellcheck misses that
 cleanup() { rm -f "${TASK_FILE}" "${PROOF_FILE}"; }
 trap cleanup EXIT
 

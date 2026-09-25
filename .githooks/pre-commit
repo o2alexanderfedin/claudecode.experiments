@@ -5,6 +5,14 @@
 # Get current branch name
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
+# A merge in progress is git-flow finishing a branch. A clean merge never runs
+# this hook; a conflicted one stops, and its resolution is committed with
+# `git commit`, which does. Rejecting that commit would leave the protected
+# branch stuck mid-merge with --no-verify as the only way out.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+  exit 0
+fi
+
 # Protected branches - no direct commits allowed
 PROTECTED_BRANCHES="^(main|develop)$"
 

@@ -42,11 +42,11 @@ fi
 # a zero-width terminal. Only ever resize a terminal we created ourselves.
 [ -n "${RUN_TASK_PTY:-}" ] && { stty rows 50 columns 200 2>/dev/null || true; }
 
-CLAUDE_ENG="${HOME}/claude-eng"
+CLAUDE_ENG="${CLAUDE_ENG:-${HOME}/claude-eng}"
 TASK_FILE="${REPO_ROOT}/task.md"
 PROMPT='execute task from task.md file'
 RUN_TIMEOUT=${RUN_TIMEOUT:-900}
-KILL_GRACE=20
+KILL_GRACE=${KILL_GRACE:-20}
 
 [ -x "${CLAUDE_ENG}" ] || { echo "not executable: ${CLAUDE_ENG}" >&2; exit 127; }
 [ -s "${TASK_FILE}" ]  || { echo "missing or empty: ${TASK_FILE}" >&2; exit 66; }
@@ -57,6 +57,13 @@ cd "${REPO_ROOT}"
 # Arms the Stop hook. Without it the hook is a no-op, so ordinary interactive
 # sessions in this repository are unaffected.
 export CLAUDE_BATCH_EXIT=1
+
+# The Stop hook creates this file before it signals the session. It is the only
+# way to tell "the hook ended the turn" from "timeout(1) killed a hung session":
+# both can end in SIGKILL, so both can exit 137.
+mkdir -p "${LOG_DIR}"
+export CLAUDE_BATCH_EXIT_MARKER="${LOG_DIR}/run-task.stop-hook-fired"
+rm -f "${CLAUDE_BATCH_EXIT_MARKER}"
 
 echo "── run-task ──────────────────────────────────────────"
 echo "cwd     : $(pwd)"
@@ -81,11 +88,26 @@ echo "── outcome ───────────────────�
 echo "raw exit : ${rc}"
 echo "elapsed  : ${elapsed}s"
 
+hook_fired=0
+[ -e "${CLAUDE_BATCH_EXIT_MARKER}" ] && hook_fired=1
+rm -f "${CLAUDE_BATCH_EXIT_MARKER}"
+
 case "${rc}" in
   143|137)
-    # 128+SIGTERM / 128+SIGKILL — the Stop hook ended the session on purpose.
-    echo "status   : COMPLETED (terminated by Stop hook after the turn)"
-    status=0 ;;
+    if [ "${hook_fired}" = 1 ]; then
+      # 128+SIGTERM / 128+SIGKILL — the Stop hook ended the session on purpose.
+      echo "status   : COMPLETED (terminated by Stop hook after the turn)"
+      status=0
+    elif [ "${rc}" = 137 ]; then
+      # The session ignored timeout's SIGTERM, so timeout(1) followed up with
+      # SIGKILL after KILL_GRACE and exited 137 instead of 124. (A SIGKILL from
+      # anywhere else lands here too; either way the turn did not finish.)
+      echo "status   : TIMED OUT after ${RUN_TIMEOUT}s — the turn never ended"
+      status=124
+    else
+      echo "status   : FAILED (killed by a signal the Stop hook did not send)"
+      status="${rc}"
+    fi ;;
   0)
     echo "status   : COMPLETED (session exited on its own)"
     status=0 ;;

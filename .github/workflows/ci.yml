@@ -21,3 +21,6 @@ jobs:
 
       - name: pre-commit hook behaviour in throwaway repos
         run: tests/pre-commit.test.sh
+
+      - name: run-task verdicts against fake claude sessions
+        run: tests/run-task.test.sh

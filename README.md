@@ -118,6 +118,11 @@ Two safeties:
   `SIGKILL`, so it is worth knowing about.
 - `SIGTERM` first, `SIGKILL` after a 5 s grace, because Claude Code has been
   observed to ignore `SIGTERM`.
+- Before signalling, the hook creates the file named by
+  `CLAUDE_BATCH_EXIT_MARKER`. `run-task.sh` reports COMPLETED on a signal exit
+  only when that file exists. A hung session that ignores `SIGTERM` is also
+  ended by `SIGKILL` — from `timeout(1)` — and exits 137 just like a hook kill;
+  the marker is what keeps that run reported as TIMED OUT (exit 124).
 
 ### Harness notes
 

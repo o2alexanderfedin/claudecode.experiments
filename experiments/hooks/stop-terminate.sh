@@ -20,6 +20,10 @@ set -uo pipefail
 
 [ "${CLAUDE_BATCH_EXIT:-}" = "1" ] || exit 0
 
+# Tell the runner this ending is ours. Without the marker it cannot tell our
+# SIGKILL apart from the one timeout(1) sends a hung session.
+[ -n "${CLAUDE_BATCH_EXIT_MARKER:-}" ] && : > "${CLAUDE_BATCH_EXIT_MARKER}"
+
 find_claude_ancestor() {
   local pid=$$ parent comm
   while :; do

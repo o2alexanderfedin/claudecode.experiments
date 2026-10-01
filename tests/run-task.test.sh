@@ -50,6 +50,7 @@ run() {
   local out rc
   out=$(CLAUDE_ENG="$PWD/${2:-fake-claude}" RUN_TIMEOUT="$1" KILL_GRACE=1 with_pty "$RUNNER" 2>&1 </dev/null)
   rc=$?
+  printf '%s\n' "$out" | tr -d '\r' > run.out
   echo "$rc $(printf '%s\n' "$out" | tr -d '\r' | sed -n 's/^status *: \([A-Z ]*\).*/\1/p' | sed 's/ *$//')"
 }
 
@@ -125,6 +126,20 @@ new_case exits-without-reading "exit 0"
 PTY_ENV=('BASH_FUNC_printf%%=() { while :; do builtin printf "$@" || return; done; }')
 expect "session that exits without reading the prompt" "0 COMPLETED" "$(run 600)"
 PTY_ENV=()
+
+# The Stop hook fires but finds no `claude` between itself and the runner, as
+# when CLAUDE_ENG starts the CLI under another name. Nobody will end the
+# session, so without a report the run would sit out the whole timeout and
+# read as TIMED OUT. It must end at once, as a distinct failure. "At once" is
+# checked without a clock: the only things that could end this session are a
+# signal from the hook's report (raw exit 143) or its own `sleep 600` running
+# out (raw exit 0); the timeout is set longer than that sleep.
+new_case hook-finds-no-session ""
+ln -s /bin/bash not-claude
+printf '#!/bin/sh\nexec "%s/not-claude" "%s/fake-claude.body"\n' "$PWD" "$PWD" > fake-claude
+printf 'stop_hook() { "%s"; }\n%s\n' "$HOOK" "stop_hook 2>/dev/null; exec sleep 600" > fake-claude.body
+expect "Stop hook that finds no claude session fails the run" "70 FAILED" "$(run 900)"
+expect "Stop hook that finds no claude session ends it at once" "143" "$(sed -n 's/^raw exit : //p' run.out)"
 
 echo
 echo "$failures failure(s)"

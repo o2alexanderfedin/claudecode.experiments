@@ -24,6 +24,10 @@ set -uo pipefail
 [ "${CLAUDE_BATCH_EXIT:-}" = "1" ] || exit 0
 [ -n "${CLAUDE_BATCH_RUNNER_PID:-}" ] || exit 0
 
+# Prints the batch session's pid and returns 0; returns 1 for a turn that is
+# not the batch session's. Returns 2 when the walk reaches the runner without
+# passing any `claude`: then it prints the runner's own child (timeout(1)),
+# the one process left that can still end the run.
 find_batch_session() {
   local pid=$$ parent comm target=""
   while :; do
@@ -31,7 +35,10 @@ find_batch_session() {
     [ -n "${parent}" ] || return 1
     [ "${parent}" -gt 1 ] 2>/dev/null || return 1
     if [ "${parent}" = "${CLAUDE_BATCH_RUNNER_PID}" ]; then
-      [ -n "${target}" ] || return 1
+      if [ -z "${target}" ]; then
+        echo "${pid}"
+        return 2
+      fi
       echo "${target}"
       return 0
     fi
@@ -47,10 +54,22 @@ find_batch_session() {
   done
 }
 
-target=$(find_batch_session) || {
-  echo "stop-terminate: not the batch session's own turn; leaving it alone" >&2
-  exit 0
-}
+target=$(find_batch_session)
+case $? in
+  0) ;;
+  2)
+    # The hook runs under the runner, yet no process on the way is named
+    # `claude` (CLAUDE_ENG starts the CLI under another name, for example).
+    # Nothing can tell which process is the session, so say so and end the
+    # run now instead of letting it sit out the whole timeout.
+    [ -n "${CLAUDE_BATCH_NO_SESSION_MARKER:-}" ] && : > "${CLAUDE_BATCH_NO_SESSION_MARKER}"
+    echo "stop-terminate: no claude process between this hook and the runner; ending the run through pid ${target}" >&2
+    kill -TERM "${target}" 2>/dev/null || true
+    exit 0 ;;
+  *)
+    echo "stop-terminate: not the batch session's own turn; leaving it alone" >&2
+    exit 0 ;;
+esac
 
 # Tell the runner this ending is ours. Without the marker it cannot tell our
 # SIGKILL apart from the one timeout(1) sends a hung session. Written only now,

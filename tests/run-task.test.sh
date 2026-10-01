@@ -30,18 +30,23 @@ new_case() {
   cd "$dir" || exit 1
   echo "do the thing" > task.md
   ln -s /bin/bash claude
-  printf 'stop_hook() { "%s"; }\n%s\n' "$HOOK" "$2" > body.sh
-  printf '#!/bin/sh\nexec "%s/claude" "%s/body.sh"\n' "$dir" "$dir" > fake-claude
-  chmod +x fake-claude
+  add_fake fake-claude "$2"
+}
+
+# Another fake claude in the current case, named $1, whose body is $2.
+add_fake() {
+  printf 'stop_hook() { "%s"; }\n%s\n' "$HOOK" "$2" > "$1.body"
+  printf '#!/bin/sh\nexec "%s/claude" "%s/%s.body"\n' "$PWD" "$PWD" "$1" > "$1"
+  chmod +x "$1"
 }
 
 # Runs the runner in the current case; prints "<exit> <status line>".
 # $1 is RUN_TIMEOUT: 1 for fakes that hang forever, so the timeout is certain to
 # fire; a generous one for fakes that end by themselves, so it never does, no
-# matter how slowly a loaded machine starts them.
+# matter how slowly a loaded machine starts them. $2 names the fake to run.
 run() {
   local out rc
-  out=$(CLAUDE_ENG="$PWD/fake-claude" RUN_TIMEOUT="$1" KILL_GRACE=1 with_pty "$RUNNER" 2>&1 </dev/null)
+  out=$(CLAUDE_ENG="$PWD/${2:-fake-claude}" RUN_TIMEOUT="$1" KILL_GRACE=1 with_pty "$RUNNER" 2>&1 </dev/null)
   rc=$?
   echo "$rc $(printf '%s\n' "$out" | tr -d '\r' | sed -n 's/^status *: \([A-Z ]*\).*/\1/p' | sed 's/ *$//')"
 }
@@ -88,6 +93,25 @@ expect "session terminated by someone else is a failure" "143 FAILED" "$(run 600
 # still hang afterwards, and then the run must be a timeout.
 new_case nested-claude-then-hang "\"\$PWD/claude\" -c 'stop_hook() { \"$HOOK\"; }; stop_hook 2>/dev/null; :'; trap '' TERM; exec sleep 60"
 expect "a claude started by the task does not complete the run" "124 TIMED OUT" "$(run 1)"
+
+# Two runs in one checkout at the same time. A's Stop hook fires while B is
+# still running; B's session is then ended by a SIGTERM nobody's hook sent.
+# B must not take A's hook for its own. The files `b-started`, `a-hooked` and
+# `b-done` only order the two runs; nothing waits on the clock.
+new_case concurrent-runs ""
+add_fake fake-b "touch b-started; until [ -e a-hooked ]; do sleep 0.1; done; kill -TERM \$\$"
+add_fake fake-a "trap '' TERM; stop_hook 2>/dev/null; touch a-hooked; until [ -e b-done ]; do sleep 0.1; done; kill -KILL \$\$"
+run 600 fake-b > b.result &
+b_pid=$!
+until [ -e b-started ]; do sleep 0.1; done
+run 600 fake-a > a.result &
+a_pid=$!
+wait "$b_pid"
+touch b-done
+wait "$a_pid"
+expect "concurrent run: a hook in another run does not complete this one" "143 FAILED" "$(cat b.result)"
+expect "concurrent run: the run whose hook fired completes" "0 COMPLETED" "$(cat a.result)"
+expect "concurrent run: no marker is left behind" "" "$(ls out/*stop-hook-fired* 2>/dev/null)"
 
 echo
 echo "$failures failure(s)"

@@ -60,10 +60,12 @@ export CLAUDE_BATCH_EXIT=1
 
 # The Stop hook creates this file before it signals the session. It is the only
 # way to tell "the hook ended the turn" from "timeout(1) killed a hung session":
-# both can end in SIGKILL, so both can exit 137.
+# both can end in SIGKILL, so both can exit 137. The name carries this run's
+# pid: two runs in one checkout must never read or delete each other's marker.
 mkdir -p "${LOG_DIR}"
-export CLAUDE_BATCH_EXIT_MARKER="${LOG_DIR}/run-task.stop-hook-fired"
+export CLAUDE_BATCH_EXIT_MARKER="${LOG_DIR}/run-task.$$.stop-hook-fired"
 rm -f "${CLAUDE_BATCH_EXIT_MARKER}"
+trap 'rm -f "${CLAUDE_BATCH_EXIT_MARKER}"' EXIT
 # The hook acts only for the claude directly below this process, never for one
 # the task starts or one above us.
 export CLAUDE_BATCH_RUNNER_PID=$$

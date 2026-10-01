@@ -13,8 +13,10 @@ failures=0
 # The runner refuses to start without a TTY on stdout. Give it one through
 # python's pty module, which behaves the same on macOS and Linux (unlike
 # script(1), whose argument syntax differs between the two).
+# Extra NAME=value pairs for the runner's environment go in PTY_ENV.
+PTY_ENV=()
 with_pty() {
-  python3 -c 'import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))' "$@"
+  env ${PTY_ENV[@]+"${PTY_ENV[@]}"} python3 -c 'import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))' "$@"
 }
 
 # A repo holding a task.md, and a fake claude that runs $2 as a bash script.
@@ -112,6 +114,17 @@ wait "$a_pid"
 expect "concurrent run: a hook in another run does not complete this one" "143 FAILED" "$(cat b.result)"
 expect "concurrent run: the run whose hook fired completes" "0 COMPLETED" "$(cat a.result)"
 expect "concurrent run: no marker is left behind" "" "$(ls out/*stop-hook-fired* 2>/dev/null)"
+
+# A session that exits on its own without reading the prompt. The prompt
+# writer is then left with a pipe nobody reads and dies of SIGPIPE (or gets
+# EPIPE). The run's verdict must follow the session, not the writer. The
+# runner's printf is replaced, through an exported bash function, by one that
+# keeps writing, so the writer is certain to be still writing when the
+# session is gone — as a slow writer or a long prompt would be.
+new_case exits-without-reading "exit 0"
+PTY_ENV=('BASH_FUNC_printf%%=() { while :; do builtin printf "$@" || return; done; }')
+expect "session that exits without reading the prompt" "0 COMPLETED" "$(run 600)"
+PTY_ENV=()
 
 echo
 echo "$failures failure(s)"

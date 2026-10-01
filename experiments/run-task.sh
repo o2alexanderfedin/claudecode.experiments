@@ -83,8 +83,11 @@ set +e
 # --foreground is mandatory: without it timeout(1) puts claude in its own
 # process group, its first terminal read raises SIGTTIN, and the process stops
 # dead before it ever renders the TUI or reads the prompt.
+# The verdict is claude's exit alone. A session that ends without reading its
+# input leaves printf writing to a closed pipe (SIGPIPE, 141), and pipefail
+# would report that instead.
 printf '%s\n' "${PROMPT}" | timeout --foreground -k "${KILL_GRACE}" "${RUN_TIMEOUT}" "${CLAUDE_ENG}"
-rc=$?
+rc=${PIPESTATUS[1]}
 set -e
 elapsed=$(( SECONDS - start ))
 

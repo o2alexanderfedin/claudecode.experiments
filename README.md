@@ -123,6 +123,11 @@ Two safeties:
   only when that file exists. A hung session that ignores `SIGTERM` is also
   ended by `SIGKILL` — from `timeout(1)` — and exits 137 just like a hook kill;
   the marker is what keeps that run reported as TIMED OUT (exit 124).
+- The hook acts only for the session `run-task.sh` launched: the walk from the
+  nearest `claude` must reach the runner (`CLAUDE_BATCH_RUNNER_PID`) without
+  meeting a second `claude`. A `claude` the task itself starts inherits the
+  batch environment and fires the same hook; it neither writes the marker nor
+  gets signalled, so it cannot make a later hang read as COMPLETED.
 
 ### Harness notes
 

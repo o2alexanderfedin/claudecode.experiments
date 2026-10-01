@@ -17,22 +17,21 @@ with_pty() {
   python3 -c 'import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))' "$@"
 }
 
-# A repo holding a task.md, and a fake claude whose body is $2.
+# A repo holding a task.md, and a fake claude that runs $2 as a bash script.
 #
-# The fake may call the real Stop hook as `stop_hook`. The hook walks up the
-# process tree to the nearest `claude` and kills it; from inside a test that
-# could be the Claude Code session running the suite. So the hook always runs
-# with a `ps` that reports no parent, which makes it find nothing to kill.
+# The fake is bash reached through a symlink named `claude`, so `ps` reports it
+# the way it reports the real binary and the Stop hook recognises it. The body
+# may call the real Stop hook as `stop_hook`, exactly as Claude Code would: as
+# a child of the session. The hook never looks above the runner, so it cannot
+# reach the Claude Code session that may be running this suite.
 new_case() {
   local dir="$WORK/$1"
   git init -q "$dir"
   cd "$dir" || exit 1
   echo "do the thing" > task.md
-  mkdir shim
-  printf '#!/bin/sh\nexit 0\n' > shim/ps
-  chmod +x shim/ps
-  # shellcheck disable=SC2016  # $PATH is meant to expand inside the fake
-  printf '#!/bin/bash\nstop_hook() { PATH="%s:$PATH" "%s"; }\n%s\n' "$dir/shim" "$HOOK" "$2" > fake-claude
+  ln -s /bin/bash claude
+  printf 'stop_hook() { "%s"; }\n%s\n' "$HOOK" "$2" > body.sh
+  printf '#!/bin/sh\nexec "%s/claude" "%s/body.sh"\n' "$dir" "$dir" > fake-claude
   chmod +x fake-claude
 }
 
@@ -67,10 +66,10 @@ new_case hang-honours-term "exec sleep 60"
 expect "session that hangs and honours SIGTERM is a timeout" "124 TIMED OUT" "$(run 1)"
 
 # The Stop hook fired: it leaves the marker, then signals the session.
-new_case stop-hook-term "stop_hook 2>/dev/null; kill -TERM \$\$"
+new_case stop-hook-term "stop_hook 2>/dev/null; exec sleep 60"
 expect "Stop hook ends the session with SIGTERM" "0 COMPLETED" "$(run 600)"
 
-new_case stop-hook-kill "stop_hook 2>/dev/null; kill -KILL \$\$"
+new_case stop-hook-kill "trap '' TERM; stop_hook 2>/dev/null; kill -KILL \$\$"
 expect "Stop hook ends the session with SIGKILL" "0 COMPLETED" "$(run 600)"
 
 new_case exits-cleanly "exit 0"
@@ -82,6 +81,13 @@ expect "session that fails" "3 FAILED" "$(run 600)"
 # SIGTERM that the Stop hook did not send is not a completed turn.
 new_case terminated-externally "kill -TERM \$\$"
 expect "session terminated by someone else is a failure" "143 FAILED" "$(run 600)"
+
+# The task may start a claude of its own, e.g. one of the examples. That
+# session inherits the batch environment and fires the same Stop hook when its
+# own turn ends. It must not mark the batch run as done: the batch session can
+# still hang afterwards, and then the run must be a timeout.
+new_case nested-claude-then-hang "\"\$PWD/claude\" -c 'stop_hook() { \"$HOOK\"; }; stop_hook 2>/dev/null; :'; trap '' TERM; exec sleep 60"
+expect "a claude started by the task does not complete the run" "124 TIMED OUT" "$(run 1)"
 
 echo
 echo "$failures failure(s)"

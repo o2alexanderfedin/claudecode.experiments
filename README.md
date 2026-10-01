@@ -110,7 +110,7 @@ The hook walks up from its own pid and takes the **nearest** `claude` ancestor.
 Nearest matters: a runner may well be launched from another Claude Code session,
 which sits further up the same chain and must not be touched.
 
-Two safeties:
+Four safeties:
 
 - The hook is a no-op unless `CLAUDE_BATCH_EXIT=1` is in the environment, and
   only `run-task.sh` exports it. Interactive sessions in this repository are

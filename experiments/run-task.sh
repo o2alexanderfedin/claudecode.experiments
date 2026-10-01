@@ -64,6 +64,9 @@ export CLAUDE_BATCH_EXIT=1
 mkdir -p "${LOG_DIR}"
 export CLAUDE_BATCH_EXIT_MARKER="${LOG_DIR}/run-task.stop-hook-fired"
 rm -f "${CLAUDE_BATCH_EXIT_MARKER}"
+# The hook acts only for the claude directly below this process, never for one
+# the task starts or one above us.
+export CLAUDE_BATCH_RUNNER_PID=$$
 
 echo "── run-task ──────────────────────────────────────────"
 echo "cwd     : $(pwd)"

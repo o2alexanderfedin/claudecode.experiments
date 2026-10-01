@@ -97,7 +97,7 @@ echo "── run ─────────────────────
 start=${SECONDS}
 set +e
 printf '%s\n/exit\n' "${PROMPT}" | timeout --foreground -k "${KILL_GRACE}" "${RUN_TIMEOUT}" "${CLAUDE_ENG}"
-rc=$?
+rc=${PIPESTATUS[1]}
 set -e
 elapsed=$(( SECONDS - start ))
 

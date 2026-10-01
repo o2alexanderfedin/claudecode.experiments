@@ -110,7 +110,7 @@ The hook walks up from its own pid and takes the **nearest** `claude` ancestor.
 Nearest matters: a runner may well be launched from another Claude Code session,
 which sits further up the same chain and must not be touched.
 
-Four safeties:
+Five safeties:
 
 - The hook is a no-op unless `CLAUDE_BATCH_EXIT=1` is in the environment, and
   only `run-task.sh` exports it. Interactive sessions in this repository are
@@ -128,6 +128,11 @@ Four safeties:
   meeting a second `claude`. A `claude` the task itself starts inherits the
   batch environment and fires the same hook; it neither writes the marker nor
   gets signalled, so it cannot make a later hang read as COMPLETED.
+- If the hook fires but finds no process named `claude` between itself and
+  the runner (`CLAUDE_ENG` starts the CLI under another name), it leaves a
+  second marker, `CLAUDE_BATCH_NO_SESSION_MARKER`, and ends `timeout(1)`.
+  The run then fails at once with exit 70 and the reason, instead of waiting
+  out `RUN_TIMEOUT` and reading as TIMED OUT.
 
 ### Harness notes
 

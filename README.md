@@ -106,11 +106,16 @@ an event, never an estimate.
 
 ### Terminating the *correct* process
 
-The hook walks up from its own pid and takes the **nearest** `claude` ancestor.
-Nearest matters: a runner may well be launched from another Claude Code session,
-which sits further up the same chain and must not be touched.
+The hook finds the session by **where it sits**, not by its name. `run-task.sh`
+starts `timeout(1)`, and `timeout(1)` starts `CLAUDE_ENG`: that process is the
+session. The hook acts only when the process that ran it is that session. A
+name would not do: a CLI started by an interpreter, such as a `node` script,
+shows the interpreter's name, and a `claude` the task starts is named `claude`
+too. Looking only below the runner also matters:
+a runner may well be launched from another Claude Code session, which sits
+further up the same chain and must not be touched.
 
-Five safeties:
+Four safeties:
 
 - The hook is a no-op unless `CLAUDE_BATCH_EXIT=1` is in the environment, and
   only `run-task.sh` exports it. Interactive sessions in this repository are
@@ -123,16 +128,17 @@ Five safeties:
   only when that file exists. A hung session that ignores `SIGTERM` is also
   ended by `SIGKILL` — from `timeout(1)` — and exits 137 just like a hook kill;
   the marker is what keeps that run reported as TIMED OUT (exit 124).
-- The hook acts only for the session `run-task.sh` launched: the walk from the
-  nearest `claude` must reach the runner (`CLAUDE_BATCH_RUNNER_PID`) without
-  meeting a second `claude`. A `claude` the task itself starts inherits the
-  batch environment and fires the same hook; it neither writes the marker nor
-  gets signalled, so it cannot make a later hang read as COMPLETED.
-- If the hook fires but finds no process named `claude` between itself and
-  the runner (`CLAUDE_ENG` starts the CLI under another name), it leaves a
-  second marker, `CLAUDE_BATCH_NO_SESSION_MARKER`, and ends `timeout(1)`.
-  The run then fails at once with exit 70 and the reason, instead of waiting
-  out `RUN_TIMEOUT` and reading as TIMED OUT.
+- The hook acts only for the session `run-task.sh` launched
+  (`CLAUDE_BATCH_RUNNER_PID` names the runner). A `claude` the task itself
+  starts inherits the batch environment and fires the same hook; it neither
+  writes the marker nor gets signalled, so it cannot make a later hang read as
+  COMPLETED.
+
+`CLAUDE_ENG` may be the CLI itself, or a wrapper that starts it — with `exec`,
+or without it as its direct child (the runner passes the path on as
+`CLAUDE_BATCH_ENG` so the hook can recognise the wrapper). A wrapper that puts
+a further process between itself and the CLI is not supported: its session is
+never recognised and the run ends as TIMED OUT.
 
 ### Harness notes
 

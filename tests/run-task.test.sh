@@ -127,19 +127,44 @@ PTY_ENV=('BASH_FUNC_printf%%=() { while :; do builtin printf "$@" || return; don
 expect "session that exits without reading the prompt" "0 COMPLETED" "$(run 600)"
 PTY_ENV=()
 
-# The Stop hook fires but finds no `claude` between itself and the runner, as
-# when CLAUDE_ENG starts the CLI under another name. Nobody will end the
-# session, so without a report the run would sit out the whole timeout and
-# read as TIMED OUT. It must end at once, as a distinct failure. "At once" is
-# checked without a clock: the only things that could end this session are a
-# signal from the hook's report (raw exit 143) or its own `sleep 600` running
-# out (raw exit 0); the timeout is set longer than that sleep.
-new_case hook-finds-no-session ""
+# The session is recognised by where it sits, not by its name: it is the
+# process timeout(1) started. The CLI may run under any name -- a CLI started
+# by an interpreter shows the interpreter's name. Its Stop hook must still end
+# the run.
+new_case cli-under-another-name ""
 ln -s /bin/bash not-claude
 printf '#!/bin/sh\nexec "%s/not-claude" "%s/fake-claude.body"\n' "$PWD" "$PWD" > fake-claude
 printf 'stop_hook() { "%s"; }\n%s\n' "$HOOK" "stop_hook 2>/dev/null; exec sleep 600" > fake-claude.body
-expect "Stop hook that finds no claude session fails the run" "70 FAILED" "$(run 900)"
-expect "Stop hook that finds no claude session ends it at once" "143" "$(sed -n 's/^raw exit : //p' run.out)"
+expect "a CLI under another name is ended by its Stop hook" "0 COMPLETED" "$(run 900)"
+
+# The same session under another name, and a `claude` the task starts. That
+# claude's Stop hook used to be taken for the batch session's, because it was
+# the only process named `claude` on the way to the runner: the run was marked
+# done, and a session that then hung read as COMPLETED.
+new_case nested-claude-under-another-name ""
+ln -s /bin/bash not-claude
+printf '#!/bin/sh\nexec "%s/not-claude" "%s/fake-claude.body"\n' "$PWD" "$PWD" > fake-claude
+printf 'stop_hook() { "%s"; }\n%s\n' "$HOOK" "\"\$PWD/claude\" -c 'stop_hook() { \"$HOOK\"; }; stop_hook 2>/dev/null; :'; trap '' TERM; exec sleep 60" > fake-claude.body
+expect "a claude started by a session under another name does not complete the run" "124 TIMED OUT" "$(run 1)"
+
+# CLAUDE_ENG may be a wrapper that starts the CLI without exec, so the session
+# is the wrapper's child, not the process timeout(1) started.
+new_case wrapper-without-exec ""
+ln -s /bin/bash not-claude
+printf '#!/bin/sh\n"%s/not-claude" "%s/fake-claude.body"\nexit $?\n' "$PWD" "$PWD" > fake-claude
+printf 'stop_hook() { "%s"; }\n%s\n' "$HOOK" "stop_hook 2>/dev/null; exec sleep 600" > fake-claude.body
+expect "a session started by a wrapper without exec is ended by its Stop hook" "0 COMPLETED" "$(run 900)"
+expect "a session started by a wrapper without exec is ended at once" "143" "$(sed -n 's/^raw exit : //p' run.out)"
+
+# Claude Code may start a hook through a shell that does nothing but run it.
+# That shell sits between the hook and the session and must be passed over.
+# `hookshell` is such a shell. If the hook stopped there, it would leave the
+# session alone and the body would go on to `exit 5`.
+new_case hook-run-through-a-shell "\"\$PWD/hookshell\" \"$HOOK\" 2>/dev/null; exit 5"
+# shellcheck disable=SC2016  # the shim expands its own "$1" when it runs
+printf '#!/bin/sh\n"$1"\nexit $?\n' > hookshell
+chmod +x hookshell
+expect "a Stop hook started through a shell ends the session" "0 COMPLETED" "$(run 600)"
 
 echo
 echo "$failures failure(s)"

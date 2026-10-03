@@ -24,3 +24,6 @@ jobs:
 
       - name: run-task verdicts against fake claude sessions
         run: tests/run-task.test.sh
+
+      - name: stdin-queued-exit keeps the user's task.md and pong.txt
+        run: tests/stdin-queued-exit.test.sh

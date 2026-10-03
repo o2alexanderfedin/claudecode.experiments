@@ -84,8 +84,23 @@ fi
 echo "stop-terminate: turn finished, terminating claude pid ${target}" >&2
 
 # SIGTERM first so the session gets a chance to flush; Claude Code has been
-# observed to ignore it, hence the SIGKILL follow-up from a detached watchdog.
+# observed to ignore it, hence a SIGKILL follow-up from a detached watchdog.
+# The watchdog must never hit another process that later gets the same pid:
+# it remembers the target's start time and command line, stops as soon as
+# they no longer match (the session is gone), and checks them again right
+# before the SIGKILL.
+identity_of() { ps -o lstart=,args= -p "$1" 2>/dev/null; }
+identity=$(identity_of "${target}")
 kill -TERM "${target}" 2>/dev/null || true
-( sleep 5; kill -KILL "${target}" 2>/dev/null || true ) >/dev/null 2>&1 &
+if [ -n "${identity}" ]; then
+  (
+    for _ in $(seq 50); do
+      [ "$(identity_of "${target}")" = "${identity}" ] || exit 0
+      sleep 0.1
+    done
+    [ "$(identity_of "${target}")" = "${identity}" ] || exit 0
+    kill -KILL "${target}" 2>/dev/null || true
+  ) >/dev/null 2>&1 &
+fi
 
 exit 0

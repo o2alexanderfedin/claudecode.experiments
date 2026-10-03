@@ -64,14 +64,14 @@ export CLAUDE_BATCH_EXIT=1
 # pid: two runs in one checkout must never read or delete each other's marker.
 mkdir -p "${LOG_DIR}"
 export CLAUDE_BATCH_EXIT_MARKER="${LOG_DIR}/run-task.$$.stop-hook-fired"
-# The hook creates this one instead when it fires but finds no claude process
-# to end; it then ends the run itself, so the run fails at once with a reason.
-export CLAUDE_BATCH_NO_SESSION_MARKER="${LOG_DIR}/run-task.$$.no-session"
-rm -f "${CLAUDE_BATCH_EXIT_MARKER}" "${CLAUDE_BATCH_NO_SESSION_MARKER}"
-trap 'rm -f "${CLAUDE_BATCH_EXIT_MARKER}" "${CLAUDE_BATCH_NO_SESSION_MARKER}"' EXIT
-# The hook acts only for the claude directly below this process, never for one
-# the task starts or one above us.
+rm -f "${CLAUDE_BATCH_EXIT_MARKER}"
+trap 'rm -f "${CLAUDE_BATCH_EXIT_MARKER}"' EXIT
+# The hook acts only for the session this process starts through timeout(1),
+# never for one the task starts or one above us. It finds that session by its
+# place under this pid, not by its name; CLAUDE_BATCH_ENG lets it recognise a
+# CLAUDE_ENG wrapper that starts the CLI without exec.
 export CLAUDE_BATCH_RUNNER_PID=$$
+export CLAUDE_BATCH_ENG="${CLAUDE_ENG}"
 
 echo "── run-task ──────────────────────────────────────────"
 echo "cwd     : $(pwd)"
@@ -101,42 +101,34 @@ echo "elapsed  : ${elapsed}s"
 
 hook_fired=0
 [ -e "${CLAUDE_BATCH_EXIT_MARKER}" ] && hook_fired=1
-no_session=0
-[ -e "${CLAUDE_BATCH_NO_SESSION_MARKER}" ] && no_session=1
-rm -f "${CLAUDE_BATCH_EXIT_MARKER}" "${CLAUDE_BATCH_NO_SESSION_MARKER}"
+rm -f "${CLAUDE_BATCH_EXIT_MARKER}"
 
-if [ "${no_session}" = 1 ]; then
-  echo "status   : FAILED (the Stop hook found no process named claude under this runner;"
-  echo "           CLAUDE_ENG must start the claude CLI, directly or through a wrapper)"
-  status=70
-else
-  case "${rc}" in
-    143|137)
-      if [ "${hook_fired}" = 1 ]; then
-        # 128+SIGTERM / 128+SIGKILL — the Stop hook ended the session on purpose.
-        echo "status   : COMPLETED (terminated by Stop hook after the turn)"
-        status=0
-      elif [ "${rc}" = 137 ]; then
-        # The session ignored timeout's SIGTERM, so timeout(1) followed up with
-        # SIGKILL after KILL_GRACE and exited 137 instead of 124. (A SIGKILL from
-        # anywhere else lands here too; either way the turn did not finish.)
-        echo "status   : TIMED OUT after ${RUN_TIMEOUT}s — the turn never ended"
-        status=124
-      else
-        echo "status   : FAILED (killed by a signal the Stop hook did not send)"
-        status="${rc}"
-      fi ;;
-    0)
-      echo "status   : COMPLETED (session exited on its own)"
-      status=0 ;;
-    124)
+case "${rc}" in
+  143|137)
+    if [ "${hook_fired}" = 1 ]; then
+      # 128+SIGTERM / 128+SIGKILL — the Stop hook ended the session on purpose.
+      echo "status   : COMPLETED (terminated by Stop hook after the turn)"
+      status=0
+    elif [ "${rc}" = 137 ]; then
+      # The session ignored timeout's SIGTERM, so timeout(1) followed up with
+      # SIGKILL after KILL_GRACE and exited 137 instead of 124. (A SIGKILL from
+      # anywhere else lands here too; either way the turn did not finish.)
       echo "status   : TIMED OUT after ${RUN_TIMEOUT}s — the turn never ended"
-      status=124 ;;
-    *)
-      echo "status   : FAILED"
-      status="${rc}" ;;
-  esac
-fi
+      status=124
+    else
+      echo "status   : FAILED (killed by a signal the Stop hook did not send)"
+      status="${rc}"
+    fi ;;
+  0)
+    echo "status   : COMPLETED (session exited on its own)"
+    status=0 ;;
+  124)
+    echo "status   : TIMED OUT after ${RUN_TIMEOUT}s — the turn never ended"
+    status=124 ;;
+  *)
+    echo "status   : FAILED"
+    status="${rc}" ;;
+esac
 
 echo "log      : ${LOG_FILE}"
 exit "${status}"

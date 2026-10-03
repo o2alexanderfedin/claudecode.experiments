@@ -13,63 +13,67 @@
 # inert for them.
 #
 # "The correct process": the session the runner launched, and only that one.
-# It is the NEAREST `claude` ancestor of this hook, and the walk up from there
-# must reach the runner (CLAUDE_BATCH_RUNNER_PID) without meeting another
-# `claude`. Everything the session starts inherits the batch environment, so a
-# `claude` the task itself runs fires this hook too; that one is not ours. Nor
-# is any session above the runner, such as one that launched it.
+# It is found by where it sits, never by its name. The runner starts
+# timeout(1), and timeout(1) starts CLAUDE_ENG; that process is the session,
+# or, when CLAUDE_ENG is a wrapper that starts the CLI without exec, its child.
+# The hook acts only when the process that ran it is that session. Everything
+# the session starts inherits the batch environment, so a `claude` the task
+# itself runs fires this hook too; that one is not ours. Nor is any session
+# above the runner, such as one that launched it.
 
 set -uo pipefail
 
 [ "${CLAUDE_BATCH_EXIT:-}" = "1" ] || exit 0
 [ -n "${CLAUDE_BATCH_RUNNER_PID:-}" ] || exit 0
 
-# Prints the batch session's pid and returns 0; returns 1 for a turn that is
-# not the batch session's. Returns 2 when the walk reaches the runner without
-# passing any `claude`: then it prints the runner's own child (timeout(1)),
-# the one process left that can still end the run.
-find_batch_session() {
-  local pid=$$ parent comm target=""
-  while :; do
-    parent=$(ps -o ppid= -p "${pid}" 2>/dev/null | tr -d ' ')
-    [ -n "${parent}" ] || return 1
-    [ "${parent}" -gt 1 ] 2>/dev/null || return 1
-    if [ "${parent}" = "${CLAUDE_BATCH_RUNNER_PID}" ]; then
-      if [ -z "${target}" ]; then
-        echo "${pid}"
-        return 2
-      fi
-      echo "${target}"
-      return 0
-    fi
-    comm=$(ps -o comm= -p "${parent}" 2>/dev/null | tr -d ' ')
-    case "${comm}" in
-      claude|*/claude)
-        # A second claude below the runner: this hook belongs to a session
-        # the batch session started, not to the batch session itself.
-        [ -z "${target}" ] || return 1
-        target=${parent} ;;
-    esac
-    pid=${parent}
-  done
+[ -n "${CLAUDE_BATCH_ENG:-}" ] || exit 0
+
+parent_of() { ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
+args_of() { ps -o args= -p "$1" 2>/dev/null | sed 's/[[:space:]]*$//'; }
+not_ours() {
+  echo "stop-terminate: not the batch session's own turn; leaving it alone" >&2
+  exit 0
 }
 
-target=$(find_batch_session)
-case $? in
-  0) ;;
-  2)
-    # The hook runs under the runner, yet no process on the way is named
-    # `claude` (CLAUDE_ENG starts the CLI under another name, for example).
-    # Nothing can tell which process is the session, so say so and end the
-    # run now instead of letting it sit out the whole timeout.
-    [ -n "${CLAUDE_BATCH_NO_SESSION_MARKER:-}" ] && : > "${CLAUDE_BATCH_NO_SESSION_MARKER}"
-    echo "stop-terminate: no claude process between this hook and the runner; ending the run through pid ${target}" >&2
-    kill -TERM "${target}" 2>/dev/null || true
-    exit 0 ;;
-  *)
-    echo "stop-terminate: not the batch session's own turn; leaving it alone" >&2
-    exit 0 ;;
+# The ancestors of this hook, nearest first, up to the runner's own child.
+chain=()
+pid=$$
+while :; do
+  parent=$(parent_of "${pid}")
+  [ -n "${parent}" ] || not_ours
+  [ "${parent}" -gt 1 ] 2>/dev/null || not_ours
+  [ "${parent}" = "${CLAUDE_BATCH_RUNNER_PID}" ] && break
+  chain+=("${parent}")
+  pid=${parent}
+done
+
+# chain[n-1] is timeout(1); chain[n-2] is the process it started.
+n=${#chain[@]}
+[ "${n}" -ge 2 ] || not_ours
+launched=${chain[n-2]}
+
+# The process that ran this hook. Claude Code may start a hook through a shell
+# that only runs this script; that shell is not the session.
+i=0
+case "$(args_of "${chain[0]}")" in
+  "${0##*/}"|*"/${0##*/}") i=1 ;;
 esac
+[ "${i}" -lt $((n - 1)) ] || not_ours
+fired_by=${chain[i]}
+
+if [ "${fired_by}" = "${launched}" ]; then
+  target=${fired_by}
+elif [ $((i + 1)) = $((n - 2)) ]; then
+  # The hook's session is a direct child of the launched process. That is the
+  # CLI only when the launched process is still CLAUDE_ENG run as a script, a
+  # wrapper that did not exec; otherwise it is a claude the task started.
+  case "$(args_of "${launched}")" in
+    *" ${CLAUDE_BATCH_ENG}") target=${fired_by} ;;
+    *) not_ours ;;
+  esac
+else
+  not_ours
+fi
 
 # Tell the runner this ending is ours. Without the marker it cannot tell our
 # SIGKILL apart from the one timeout(1) sends a hung session. Written only now,

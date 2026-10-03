@@ -166,6 +166,42 @@ printf '#!/bin/sh\n"$1"\nexit $?\n' > hookshell
 chmod +x hookshell
 expect "a Stop hook started through a shell ends the session" "0 COMPLETED" "$(run 600)"
 
+# The Stop hook's SIGKILL follow-up must reach only the process it signalled.
+# Here the session reacts to SIGTERM by turning, under the same pid, into a
+# different program -- the same thing the follow-up would meet if the session
+# died and its pid went to a new process. That program, `waiter`, waits until
+# no Stop hook process is left in its own process group (the run's terminal),
+# then exits 7. A follow-up that kills it anyway turns the run into
+# "0 COMPLETED". Only its own group is searched: other processes on the
+# machine may mention the hook's name. The pattern `stop-termina[t]e` matches
+# the hook and its follow-up but not the waiter's own text.
+new_case watchdog-spares-a-new-program "trap 'exec /bin/bash \"\$PWD/waiter\"' TERM; stop_hook 2>/dev/null; while :; do sleep 0.1; done"
+cat > waiter <<'WAITER'
+group=$(ps -o pgid= -p $$ | tr -d ' ')
+while ps -axo pgid=,args= | awk -v g="$group" '$1 == g' | grep -q 'stop-termina[t]e'; do
+  sleep 0.1
+done
+exit 7
+WAITER
+expect "the SIGKILL follow-up spares a process that is no longer the session" "7 FAILED" "$(run 600)"
+
+# A session that ignores SIGTERM is still ended by the follow-up SIGKILL, not
+# by timeout(1): both end in SIGKILL and exit 137, so the session counts the
+# SIGTERMs it gets. The hook sends one; timeout(1) would send a second, and
+# the session then leaves `second-term`. The session also records its process
+# group, which is the run's own: once the runner has returned, nothing in that
+# group -- the session, the hook, the watchdog -- may still be running.
+new_case watchdog-kills-a-hung-session "ps -o pgid= -p \$\$ | tr -d ' ' > group; terms=0; trap 'terms=\$((terms + 1)); [ \$terms -lt 2 ] || touch second-term' TERM; stop_hook 2>/dev/null; while :; do sleep 0.1; done"
+expect "the SIGKILL follow-up ends a session that ignores SIGTERM" "0 COMPLETED" "$(run 600)"
+expect "the session got no SIGTERM from timeout(1)" "absent" "$([ -e second-term ] && echo present || echo absent)"
+expect "nothing of the run is left running" "0" "$(if [ -s group ]; then ps -axo pgid= | tr -d ' ' | grep -c -x "$(cat group)"; else echo no-group-recorded; fi)"
+
+# The same for a session that obeys the hook's SIGTERM at once: the watchdog
+# then has nobody left to kill and must not stay behind after the run.
+new_case watchdog-leaves-with-the-session "ps -o pgid= -p \$\$ | tr -d ' ' > group; stop_hook 2>/dev/null; exec sleep 60"
+expect "a session that obeys SIGTERM completes" "0 COMPLETED" "$(run 600)"
+expect "nothing of that run is left running" "0" "$(if [ -s group ]; then ps -axo pgid= | tr -d ' ' | grep -c -x "$(cat group)"; else echo no-group-recorded; fi)"
+
 echo
 echo "$failures failure(s)"
 exit "$failures"

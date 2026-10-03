@@ -68,13 +68,30 @@ KILL_GRACE=15          # claude ignores SIGTERM; timeout needs -k to follow up
 [ -x "${CLAUDE_ENG}" ] || { echo "not executable: ${CLAUDE_ENG}" >&2; exit 127; }
 command -v timeout >/dev/null || { echo "timeout(1) not found" >&2; exit 127; }
 
+# task.md is also the file run-task.sh reads, and it is git-ignored: a task
+# the user prepared there has no other copy. Move both files aside for the
+# run and put them back afterwards; only files this script wrote are deleted.
+mkdir -p "${LOG_DIR}"
+SAVED_DIR=$(mktemp -d "${LOG_DIR}/stdin-queued-exit.saved.XXXXXX")
+
 # shellcheck disable=SC2329  # invoked via trap
 # shellcheck disable=SC2317  # invoked by the EXIT trap below; older shellcheck misses that
-cleanup() { rm -f "${TASK_FILE}" "${PROOF_FILE}"; }
+cleanup() {
+  local f
+  for f in "${TASK_FILE}" "${PROOF_FILE}"; do
+    rm -f "${f}"
+    if [ -e "${SAVED_DIR}/${f##*/}" ]; then
+      mv "${SAVED_DIR}/${f##*/}" "${f}"
+    fi
+  done
+  rmdir "${SAVED_DIR}"
+}
 trap cleanup EXIT
 
 cd "${REPO_ROOT}"
-rm -f "${TASK_FILE}" "${PROOF_FILE}"
+for f in "${TASK_FILE}" "${PROOF_FILE}"; do
+  if [ -e "${f}" ]; then mv "${f}" "${SAVED_DIR}/"; fi
+done
 
 cat > "${TASK_FILE}" <<'TASK'
 Create a file named pong.txt in the current directory.

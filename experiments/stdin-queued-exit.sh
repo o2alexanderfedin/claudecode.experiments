@@ -77,14 +77,21 @@ SAVED_DIR=$(mktemp -d "${LOG_DIR}/stdin-queued-exit.saved.XXXXXX")
 # shellcheck disable=SC2329  # invoked via trap
 # shellcheck disable=SC2317  # invoked by the EXIT trap below; older shellcheck misses that
 cleanup() {
-  local f
+  # Nothing here may fail: a failing command in this EXIT trap would replace
+  # the verdict with its own exit status. A file that cannot be put back stays
+  # in SAVED_DIR, and the warning says where.
+  local f name kept=0
   for f in "${TASK_FILE}" "${PROOF_FILE}"; do
-    rm -f "${f}"
-    if [ -e "${SAVED_DIR}/${f##*/}" ]; then
-      mv "${SAVED_DIR}/${f##*/}" "${f}"
+    name=${f##*/}
+    rm -f "${f}" 2>/dev/null || true
+    [ -e "${SAVED_DIR}/${name}" ] || continue
+    if [ -e "${f}" ] || ! mv "${SAVED_DIR}/${name}" "${f}" 2>/dev/null; then
+      kept=1
     fi
   done
-  rmdir "${SAVED_DIR}"
+  if [ "${kept}" = 1 ] || ! rmdir "${SAVED_DIR}" 2>/dev/null; then
+    echo "WARNING: could not put back task.md or pong.txt; your originals are in ${SAVED_DIR}" >&2
+  fi
 }
 trap cleanup EXIT
 

@@ -12,9 +12,15 @@ permissions:
 jobs:
   checks:
     name: Shell lint and hook tests
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the run-task verdicts depend on GNU
+    # timeout(1) (--foreground, exit 124 and 137), and a newer image may ship
+    # another implementation. The first step makes such a change fail loudly.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: timeout(1) is GNU coreutils
+        run: ./scripts/require-gnu-timeout.sh
 
       - name: Lint every shell script (bash -n + shellcheck)
         run: ./scripts/lint.sh
@@ -27,3 +33,6 @@ jobs:
 
       - name: stdin-queued-exit keeps the user's task.md and pong.txt
         run: tests/stdin-queued-exit.test.sh
+
+      - name: the GNU timeout check rejects other implementations
+        run: tests/require-gnu-timeout.test.sh

@@ -27,8 +27,9 @@ new_case() {
   chmod +x home/claude-eng
 }
 
+# Prints the experiment's exit status; its output is kept in run.out.
 run() {
-  HOME="$PWD/home" with_pty "$EXPERIMENT" >/dev/null 2>&1 </dev/null
+  HOME="$PWD/home" with_pty "$EXPERIMENT" > run.out 2>&1 </dev/null
   echo $?
 }
 
@@ -51,13 +52,25 @@ cp pong.txt pong.txt.before
 expect "the experiment runs to its verdict" "0" "$(run)"
 expect "the user's task.md is back unchanged" "same" "$(cmp -s task.md task.md.before && echo same || echo changed-or-missing)"
 expect "the user's pong.txt is back unchanged" "same" "$(cmp -s pong.txt pong.txt.before && echo same || echo changed-or-missing)"
-expect "no saved copy is left behind" "" "$(find . -path ./.git -prune -o -path ./home -prune -o ! -name . ! -name task.md ! -name pong.txt ! -name '*.before' ! -name out ! -name stdin-queued-exit.typescript -print)"
+expect "no saved copy is left behind" "" "$(find . -path ./.git -prune -o -path ./home -prune -o ! -name . ! -name task.md ! -name pong.txt ! -name '*.before' ! -name out ! -name stdin-queued-exit.typescript ! -name run.out -print)"
 
 # Nothing there before: the experiment leaves nothing behind, as it always did.
 new_case leaves-nothing "echo pong > pong.txt; exit 0"
 expect "the experiment runs to its verdict without user files" "0" "$(run)"
 expect "no task.md is left behind" "absent" "$([ -e task.md ] && echo present || echo absent)"
 expect "no pong.txt is left behind" "absent" "$([ -e pong.txt ] && echo present || echo absent)"
+
+# The user's task.md cannot be put back: the session left a directory of the
+# same name in its place. The experiment must still exit with its own verdict
+# (here CONFIRMED, 0), keep the user's file in the saved folder, and say
+# where that folder is.
+new_case restore-fails "echo pong > pong.txt; rm -f task.md; mkdir -p task.md/blocker; exit 0"
+printf 'the real task\n' > task.md
+cp task.md task.md.before
+expect "a failed restore keeps the experiment's verdict" "0" "$(run)"
+saved=$(find out -maxdepth 1 -name 'stdin-queued-exit.saved.*' | head -n 1)
+expect "the user's task.md is kept in the saved folder" "same" "$(cmp -s "${saved:-none}/task.md" task.md.before && echo same || echo changed-or-missing)"
+expect "the warning names the saved folder" "named" "$(if [ -n "$saved" ] && tr -d '\r' < run.out | grep 'WARNING' | grep -q -F "${saved#out/}"; then echo named; else echo not-named; fi)"
 
 echo
 echo "$failures failure(s)"
